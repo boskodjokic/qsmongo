@@ -21,7 +21,7 @@ from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from qsmongo import Field, QSMongoError, Schema, parse
+from qsmongo import Cursors, Field, QSMongoError, Schema, parse
 
 app = FastAPI(title="qsmongo example")
 
@@ -34,8 +34,13 @@ PRODUCT_QUERY = Schema(
     status=Field(str, multi=True),
     in_stock=Field(bool),
     created_at=Field(datetime, alias="audit.created"),
-    internal_cost=Field(float, sortable=False, ops={"eq"}),
+    internal_cost=Field(float, sortable=False, ops={"eq"}, projectable=False),
+    description=Field(str, ops=set(), sortable=False),  # returnable, never filterable
 )
+
+# In a real service this secret comes from configuration and is stable across restarts, otherwise
+# cursors issued before a deploy stop validating after it.
+CURSORS = Cursors(secret=os.environ.get("CURSOR_SECRET", "change-me"))
 
 
 def get_collection():
@@ -56,7 +61,7 @@ def current_tenant() -> str:
 @app.get("/products")
 def list_products(request: Request, tenant_id: str = Depends(current_tenant)):
     try:
-        query = parse(request.url.query, PRODUCT_QUERY, max_per_page=100, ignore_unknown=False)
+        query = parse(request.url.query, PRODUCT_QUERY, max_per_page=100, cursors=CURSORS)
     except QSMongoError as exc:
         # Every failure names the parameter that caused it, so the client gets a useful 400.
         raise HTTPException(status_code=400, detail={"parameter": exc.param, "error": str(exc)}) from exc
@@ -66,10 +71,19 @@ def list_products(request: Request, tenant_id: str = Depends(current_tenant)):
 
     collection = get_collection()
     if collection is None:
-        return {"filter": scoped, "sort": query.sort, "skip": query.skip, "limit": query.limit}
+        return {
+            "filter": scoped,
+            "projection": query.projection,
+            "sort": query.sort,
+            "skip": query.skip,
+            "limit": query.limit,
+        }
 
-    total = collection.count_documents(scoped)
-    items = list(collection.find(scoped, skip=query.skip, limit=query.limit, sort=query.sort or None))
+    items = list(
+        collection.find(scoped, projection=query.projection, skip=query.skip, limit=query.limit, sort=query.sort)
+    )
+    # next_cursor is built from the last document of this page; None means the end of the results.
+    next_cursor = query.next_cursor(items[-1] if items else None)
     for item in items:
         item["_id"] = str(item["_id"])
-    return {"items": items, "total": total, "page": query.page, "per_page": query.per_page}
+    return {"items": items, "next": next_cursor, "per_page": query.per_page}

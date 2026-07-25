@@ -8,16 +8,28 @@ collection.find(**query.find_kwargs())
 """
 
 from .coerce import coerce
-from .errors import InvalidPagination, InvalidValue, QSMongoError, UnknownField, UnsupportedOperator
+from .cursor import Cursors
+from .errors import (
+    InvalidCursor,
+    InvalidPagination,
+    InvalidProjection,
+    InvalidValue,
+    QSMongoError,
+    UnknownField,
+    UnsupportedOperator,
+)
 from .parser import parse
 from .query import Query
 from .schema import Field, Schema
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
+    "Cursors",
     "Field",
+    "InvalidCursor",
     "InvalidPagination",
+    "InvalidProjection",
     "InvalidValue",
     "QSMongoError",
     "Query",

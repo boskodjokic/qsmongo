@@ -17,7 +17,11 @@ except ImportError:  # pragma: no cover
 
 COMPARISON_OPS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "exists"})
 EQUALITY_OPS = frozenset({"eq", "ne", "in", "nin", "exists"})
-TEXT_OPS = EQUALITY_OPS | {"regex"}
+# Substring matching is offered as three escaped, anchored operators rather than raw regex.
+TEXT_MATCH_OPS = frozenset({"contains", "startswith", "endswith"})
+# "regex" hands the pattern straight to Mongo, so it stays opt-in per field.
+TEXT_OPS = EQUALITY_OPS | TEXT_MATCH_OPS
+ALL_OPS = COMPARISON_OPS | TEXT_MATCH_OPS | {"regex"}
 
 _DEFAULT_OPS: dict[type, frozenset[str]] = {
     str: TEXT_OPS,
@@ -38,9 +42,16 @@ class Field:
         sortable: whether the field may appear in the sort parameter.
         multi: when True, a repeated key (``tag=a&tag=b``) collapses to ``$in`` instead of erroring.
         alias: the document field name, when it differs from the name exposed in the API.
+        projectable: whether the field may be requested in the ``fields`` parameter.
+        case_sensitive: applies to contains/startswith/endswith. Case-insensitive matching cannot
+            use an ordinary index, so a case-sensitive ``startswith`` is the only substring
+            operator that stays fast on a large collection.
+
+    A field declared with ``ops=set()`` is not queryable at all — useful when you only want it to
+    be selectable via ``fields``.
     """
 
-    __slots__ = ("type", "ops", "sortable", "multi", "alias")
+    __slots__ = ("type", "ops", "sortable", "multi", "alias", "projectable", "case_sensitive")
 
     def __init__(
         self,
@@ -50,19 +61,25 @@ class Field:
         sortable: bool = True,
         multi: bool = False,
         alias: str | None = None,
+        projectable: bool = True,
+        case_sensitive: bool = False,
     ):
         if ops is None:
             ops = _DEFAULT_OPS.get(type_)
             if ops is None:
                 ops = EQUALITY_OPS  # ObjectId and anything custom
-        unknown = set(ops) - (COMPARISON_OPS | {"regex"})
+        unknown = set(ops) - ALL_OPS
         if unknown:
             raise ValueError(f"unknown operator(s) for field: {sorted(unknown)}")
+        if type_ is not str and (set(ops) & (TEXT_MATCH_OPS | {"regex"})):
+            raise ValueError(f"text operators require a str field, got {type_.__name__}")
         self.type = type_
         self.ops = frozenset(ops)
         self.sortable = sortable
         self.multi = multi
         self.alias = alias
+        self.projectable = projectable
+        self.case_sensitive = case_sensitive
 
     def __repr__(self) -> str:
         return f"Field({self.type.__name__}, ops={sorted(self.ops)}, multi={self.multi})"

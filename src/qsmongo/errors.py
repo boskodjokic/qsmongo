@@ -26,4 +26,12 @@ class InvalidValue(QSMongoError):
 
 
 class InvalidPagination(QSMongoError):
-    """page / per_page was not a usable positive integer."""
+    """page / per_page was not a usable positive integer, or two paging modes were mixed."""
+
+
+class InvalidCursor(QSMongoError):
+    """A keyset cursor was malformed, unsigned, forged, or does not match the requested sort."""
+
+
+class InvalidProjection(QSMongoError):
+    """The requested field selection cannot be turned into a MongoDB projection."""
