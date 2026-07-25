@@ -107,6 +107,21 @@ def test_changing_the_sort_between_pages_is_an_error_not_silent_nonsense():
         parse(f"sort=-score&after={cursor}", SCHEMA, cursors=SIGNED)
 
 
+def test_a_different_sort_of_the_same_length_is_also_rejected():
+    # The values alone are ambiguous: this used to decode happily and compare an int against a
+    # str field. The cursor records which sort issued it.
+    cursor = parse("sort=-score", SCHEMA, cursors=SIGNED).next_cursor({"score": 42, "_id": "abc"})
+    with pytest.raises(InvalidCursor) as excinfo:
+        parse(f"sort=name&after={cursor}", SCHEMA, cursors=SIGNED)
+    assert "issued for sort" in str(excinfo.value)
+
+
+def test_reversing_the_sort_direction_is_rejected():
+    cursor = parse("sort=-score", SCHEMA, cursors=SIGNED).next_cursor({"score": 42, "_id": "abc"})
+    with pytest.raises(InvalidCursor):
+        parse(f"sort=score&after={cursor}", SCHEMA, cursors=SIGNED)
+
+
 def test_after_and_page_cannot_be_combined():
     cursor = page_one().next_cursor({"score": 42, "_id": "abc"})
     with pytest.raises(InvalidPagination):

@@ -263,7 +263,7 @@ def parse(
             raise InvalidCursor(
                 f"{after_param} is not enabled; pass cursors=Cursors(...) to parse()", param=after_param
             )
-        keyset = keyset_filter(sort, cursors.decode(after))
+        keyset = keyset_filter(sort, cursors.decode(after, sort))
         filter_ = {"$and": [filter_, keyset]} if filter_ else keyset
 
     resolved_page = page or 1

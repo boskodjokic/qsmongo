@@ -23,7 +23,7 @@ from .parser import parse
 from .query import Query
 from .schema import Field, Schema
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "Cursors",

@@ -74,6 +74,10 @@ def _unpack(item: Any) -> Any:
     raise InvalidCursor(f"unknown cursor value type {tag!r}", param="after")
 
 
+def _render(sort: list[tuple[str, int]]) -> str:
+    return ", ".join(f"{column}:{direction}" for column, direction in sort) or "(none)"
+
+
 def _dig(document: dict, path: str) -> Any:
     """Read a possibly dotted path out of a document."""
     current: Any = document
@@ -112,20 +116,27 @@ class Cursors:
         return _b64encode(hmac.new(self._secret, payload, hashlib.sha256).digest())
 
     def encode(self, document: dict, sort: list[tuple[str, int]]) -> str:
-        """Build the cursor that resumes *after* ``document``, given the sort used to fetch it."""
+        """Build the cursor that resumes *after* ``document``, given the sort used to fetch it.
+
+        The sort is stored alongside the values. Values alone are ambiguous: two different sorts
+        with the same number of keys would decode without complaint and compare each value against
+        the wrong field.
+        """
         values = []
         for column, _ in sort:
             value = _dig(document, column)
             if value is _MISSING:
                 raise InvalidCursor(f"document has no {column!r} to build a cursor from", param="after")
             values.append(_pack(value))
-        payload = json.dumps(values, separators=(",", ":"), sort_keys=True).encode()
+        body = {"s": [[column, direction] for column, direction in sort], "v": values}
+        payload = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
         token = _b64encode(payload)
         if self._secret is None:
             return token
         return f"{token}.{self._signature(payload)}"
 
-    def decode(self, token: str) -> list[Any]:
+    def decode(self, token: str, sort: list[tuple[str, int]]) -> list[Any]:
+        """Read a cursor back, rejecting it unless ``sort`` is the one that produced it."""
         signature = None
         if "." in token:
             token, _, signature = token.partition(".")
@@ -138,12 +149,19 @@ class Cursors:
             if not hmac.compare_digest(self._signature(_b64decode(token)), signature):
                 raise InvalidCursor("cursor signature does not match", param="after")
         try:
-            values = json.loads(_b64decode(token))
+            body = json.loads(_b64decode(token))
         except ValueError:
             raise InvalidCursor("cursor is not valid JSON", param="after") from None
-        if not isinstance(values, list):
-            raise InvalidCursor("cursor payload must be a list", param="after")
-        return [_unpack(item) for item in values]
+        if not isinstance(body, dict) or not isinstance(body.get("v"), list) or not isinstance(body.get("s"), list):
+            raise InvalidCursor("cursor payload is not in the expected format", param="after")
+        issued_for = [(column, direction) for column, direction in body["s"]]
+        if issued_for != list(sort):
+            raise InvalidCursor(
+                f"cursor was issued for sort [{_render(issued_for)}] but this request sorts by "
+                f"[{_render(list(sort))}]; repeat the sort that produced the cursor",
+                param="after",
+            )
+        return [_unpack(item) for item in body["v"]]
 
     def __repr__(self) -> str:  # never leak the secret into a log line
         return f"Cursors(signed={self.signed}, id_field={self.id_field!r})"
