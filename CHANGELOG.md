@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+**Added**
+
+- `FilterBuilder` — the parsing pipeline without the URL grammar. Feed it
+  `(field, op, raw_value)` triples from any source and get the same whitelist, type coercion,
+  escaped patterns and conflict detection that `parse()` provides:
+
+      FilterBuilder(schema).add("age", "gte", "21").add("name", "contains", "ada").build()
+
+  `parse()` is now implemented on top of it, so both front-ends share one implementation.
+  `add()` takes an optional `param` naming the caller's own parameter in error messages.
+
 ## 0.3.1
 
 **Fixed**

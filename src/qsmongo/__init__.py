@@ -19,15 +19,16 @@ from .errors import (
     UnknownField,
     UnsupportedOperator,
 )
-from .parser import parse
+from .parser import FilterBuilder, parse
 from .query import Query
 from .schema import Field, Schema
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     "Cursors",
     "Field",
+    "FilterBuilder",
     "Index",
     "IndexAdvice",
     "InvalidCursor",

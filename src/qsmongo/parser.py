@@ -26,6 +26,7 @@ from .errors import (
     InvalidPagination,
     InvalidProjection,
     InvalidValue,
+    UnknownField,
     UnsupportedOperator,
 )
 from .query import Query
@@ -159,6 +160,82 @@ def _build_clause(field_def, op: str, raw: str, param: str) -> dict[str, Any]:
     return {OP_SUFFIXES[op]: coerce(field_def.type, raw, param)}
 
 
+class FilterBuilder:
+    """Build a filter from ``(field, op, value)`` triples, whatever produced them.
+
+    :func:`parse` is one front-end onto this — the URL grammar. Anything else that can name a
+    field, an operator, and a raw string value gets the same whitelist, coercion, and conflict
+    checks without adopting the query-string syntax::
+
+        builder = FilterBuilder(schema)
+        builder.add("age", "gte", "21").add("name", "contains", "ada")
+        builder.build()   # {'age': {'$gte': 21}, 'name': {'$regex': 'ada', '$options': 'i'}}
+
+    Values are raw strings, exactly as they would arrive from a URL; coercion to the declared
+    type is the point of the class, not something callers do beforehand.
+    """
+
+    __slots__ = ("schema", "_equality", "_operators")
+
+    def __init__(self, schema: Schema):
+        self.schema = schema
+        self._equality: dict[str, tuple[str, list[Any]]] = {}
+        self._operators: dict[str, dict[str, Any]] = {}
+
+    def add(self, field: str, op: str = "eq", value: str = "", *, param: str | None = None) -> FilterBuilder:
+        """Add one predicate. Returns self, so calls chain.
+
+        ``param`` is the name reported in errors; it defaults to the query-string spelling so
+        messages read the same whichever front-end produced the triple.
+        """
+        param = param or (field if op == "eq" else f"{field}__{op}")
+        if field not in self.schema:
+            # Raised here rather than from Schema.get so the caller's own parameter name survives.
+            raise UnknownField(f"unknown field {field!r}", param=param)
+        field_def = self.schema.get(field)
+        if op not in field_def.ops:
+            raise UnsupportedOperator(
+                f"field {field!r} does not support {op!r} (allowed: {sorted(field_def.ops)})", param=param
+            )
+        column = self.schema.column(field)
+        if op == "eq":
+            self._equality.setdefault(column, (field, []))[1].append(coerce(field_def.type, value, param))
+            return self
+        clause = _build_clause(field_def, op, value, param)
+        existing = self._operators.setdefault(column, {})
+        duplicate = set(existing) & set(clause) - {"$options"}
+        if duplicate:
+            raise InvalidValue(
+                f"{field!r} was given two {sorted(duplicate)[0]} clauses; combine them into one", param=param
+            )
+        existing.update(clause)
+        return self
+
+    def build(self) -> dict[str, Any]:
+        """Collapse everything added so far into one MongoDB filter document."""
+        filter_: dict[str, Any] = {}
+        for column, (field_name, values) in self._equality.items():
+            if len(values) == 1:
+                filter_[column] = values[0]
+            elif not self.schema.get(field_name).multi:
+                raise InvalidValue(
+                    f"{field_name!r} was given {len(values)} values; declare it as Field(..., multi=True) "
+                    "to combine them into an $in",
+                    param=field_name,
+                )
+            else:
+                filter_[column] = {"$in": values}
+
+        for column, clauses in self._operators.items():
+            if column in filter_:
+                raise InvalidValue(
+                    f"{column!r} has both an equality match and {sorted(clauses)}; use one or the other",
+                    param=column,
+                )
+            filter_[column] = clauses
+        return filter_
+
+
 def parse(
     query_string: str,
     schema: Schema,
@@ -181,8 +258,7 @@ def parse(
     """
     pairs = parse_qsl(query_string.lstrip("?"), keep_blank_values=True)
 
-    equality: dict[str, tuple[str, list[Any]]] = {}
-    operators: dict[str, dict[str, Any]] = {}
+    builder = FilterBuilder(schema)
     sort: list[tuple[str, int]] = []
     projection: dict[str, int] = {}
     page: int | None = None
@@ -210,44 +286,9 @@ def parse(
         field_name, op = _split_key(key)
         if ignore_unknown and field_name not in schema:
             continue
-        field_def = schema.get(field_name)  # raises UnknownField
-        if op not in field_def.ops:
-            raise UnsupportedOperator(
-                f"field {field_name!r} does not support {op!r} (allowed: {sorted(field_def.ops)})", param=key
-            )
+        builder.add(field_name, op, raw_value, param=key)
 
-        column = schema.column(field_name)
-        if op == "eq":
-            equality.setdefault(column, (field_name, []))[1].append(coerce(field_def.type, raw_value, key))
-            continue
-        clause = _build_clause(field_def, op, raw_value, key)
-        existing = operators.setdefault(column, {})
-        duplicate = set(existing) & set(clause) - {"$options"}
-        if duplicate:
-            raise InvalidValue(
-                f"{field_name!r} was given two {sorted(duplicate)[0]} clauses; combine them into one", param=key
-            )
-        existing.update(clause)
-
-    filter_: dict[str, Any] = {}
-    for column, (field_name, values) in equality.items():
-        if len(values) == 1:
-            filter_[column] = values[0]
-        else:
-            if not schema.get(field_name).multi:
-                raise InvalidValue(
-                    f"{field_name!r} was given {len(values)} values; declare it as Field(..., multi=True) "
-                    "to combine them into an $in",
-                    param=field_name,
-                )
-            filter_[column] = {"$in": values}
-
-    for column, clauses in operators.items():
-        if column in filter_:
-            raise InvalidValue(
-                f"{column!r} has both an equality match and {sorted(clauses)}; use one or the other", param=column
-            )
-        filter_[column] = clauses
+    filter_ = builder.build()
 
     # Every page, not just the ones reached by a cursor, needs a total order: two documents
     # sharing a sort value could otherwise straddle the boundary and be skipped or repeated.
