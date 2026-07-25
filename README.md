@@ -131,6 +131,44 @@ Details that matter:
 every page boundary lands in the middle of a tie, and asserts the pages reconstruct the full
 ordering exactly — no document skipped, none repeated.
 
+## Index advice
+
+A query that parses cleanly can still be a collection scan. `analyze` checks the query against your
+declared indexes using MongoDB's ESR ordering — **E**quality keys first, then **S**ort keys, then
+**R**ange keys — and suggests one when nothing fits:
+
+```python
+from qsmongo import Index, analyze
+
+INDEXES = Index.from_index_information(collection.index_information())
+
+advice = analyze(query, INDEXES, extra_equality=["tenant_id"])
+if not advice.ok:
+    log.warning("unindexed query\n%s", advice)
+```
+
+```
+no index serves this query
+  - {status: 1, price: 1, audit.created: -1} filters this query but does not provide the sort
+    {audit.created: -1}, so MongoDB sorts in memory (it aborts past its blocking-sort memory
+    limit, 100 MB by default)
+  suggested index: {status: 1, audit.created: -1, price: 1}
+```
+
+That example is the classic mistake: `{status, price, created_at}` looks sensible, but the range on
+`price` sits between the equality key and the sort key, so the index stops providing the ordering.
+Swapping the last two fixes it, and nothing about the query itself changes.
+
+It also flags the predicates that cannot use an index at all — case-insensitive or unanchored
+regex, `$ne`/`$nin`, `$exists: false` — reports covered queries, and understands that a sort on a
+field pinned by an equality match is free. `extra_equality` is for the clauses your own code adds
+(a tenant id, a soft-delete flag): they belong at the front of the index, and the advice is wrong
+without them.
+
+**This is a lint, not a query planner.** It reasons about the query shape, not your data
+distribution or the real plan cache. `explain()` remains the only ground truth; this is here to
+catch the obvious problems in CI or a dev-mode log, before they reach a database.
+
 ## Safety
 
 - **Keys** are matched against the schema, so `$where=...` or `age__$gt=...` never reach the driver.

@@ -16,12 +16,13 @@ Set MONGODB_URL to run the query against a real collection; without it the endpo
 filter it built, which is the interesting part anyway.
 """
 
+import logging
 import os
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from qsmongo import Cursors, Field, QSMongoError, Schema, parse
+from qsmongo import Cursors, Field, Index, QSMongoError, Schema, analyze, parse
 
 app = FastAPI(title="qsmongo example")
 
@@ -41,6 +42,13 @@ PRODUCT_QUERY = Schema(
 # In a real service this secret comes from configuration and is stable across restarts, otherwise
 # cursors issued before a deploy stop validating after it.
 CURSORS = Cursors(secret=os.environ.get("CURSOR_SECRET", "change-me"))
+
+# The indexes this collection actually has. In a live service you would read them once at startup
+# with Index.from_index_information(collection.index_information()).
+INDEXES = [
+    Index([("tenant_id", 1), ("status", 1), ("audit.created", -1), ("_id", 1)], name="tenant_status_created"),
+    Index([("tenant_id", 1), ("sku", 1)], name="tenant_sku"),
+]
 
 
 def get_collection():
@@ -69,6 +77,11 @@ def list_products(request: Request, tenant_id: str = Depends(current_tenant)):
     # The caller's own scoping stays the caller's responsibility: qsmongo never invents clauses.
     scoped = {"$and": [{"tenant_id": tenant_id}, query.filter]} if query.filter else {"tenant_id": tenant_id}
 
+    # tenant_id is pinned outside the parsed filter, so the advisor has to be told about it.
+    advice = analyze(query, INDEXES, extra_equality=["tenant_id"])
+    if not advice.ok:
+        logging.getLogger("qsmongo.example").warning("unindexed query\n%s", advice)
+
     collection = get_collection()
     if collection is None:
         return {
@@ -77,6 +90,7 @@ def list_products(request: Request, tenant_id: str = Depends(current_tenant)):
             "sort": query.sort,
             "skip": query.skip,
             "limit": query.limit,
+            "index_advice": str(advice),
         }
 
     items = list(
