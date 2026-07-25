@@ -1,7 +1,8 @@
 # qsmongo
 
 [![CI](https://github.com/boskodjokic/qsmongo/actions/workflows/ci.yml/badge.svg)](https://github.com/boskodjokic/qsmongo/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/qsmongo)](https://pypi.org/project/qsmongo/)
+[![Python](https://img.shields.io/pypi/pyversions/qsmongo)](https://pypi.org/project/qsmongo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Turn an HTTP query string into a MongoDB query that is **safe by construction** — nothing is
