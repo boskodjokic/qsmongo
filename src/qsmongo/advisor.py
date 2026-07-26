@@ -138,6 +138,34 @@ def _match(index: Index, equality: dict[str, None], sort: list[tuple[str, int]],
     return position, same or reversed_
 
 
+def _usable(
+    index: Index,
+    prefix: int,
+    sort_ok: bool,
+    equality: dict[str, None],
+    ranges: dict[str, None],
+    effective_sort: list[tuple[str, int]],
+) -> bool:
+    """Whether MongoDB could enter this index at all for this query.
+
+    An index is a candidate when its leading key is pinned by an equality predicate, is the field a
+    range narrows, or — for a query that filters on nothing — is the first key of the sort. That
+    last case is easy to forget and is the whole point of a sort-only endpoint: a "latest 25"
+    listing has no predicates, and the index exists purely so the server walks the order instead of
+    collecting the collection and sorting it.
+    """
+    if prefix > 0:
+        return True
+    if not index.keys:
+        return False
+    leading = index.keys[0][0]
+    if leading in ranges:
+        return True
+    # Only when the index really provides the ordering: leading on the sort field but in an order
+    # the index cannot walk still means a blocking sort.
+    return not equality and bool(effective_sort) and sort_ok and leading == effective_sort[0][0]
+
+
 def analyze(
     query: Query,
     indexes: list[Index] | None = None,
@@ -171,8 +199,7 @@ def analyze(
     best_index: Index | None = None
     for index in indexes or []:
         prefix, sort_ok = _match(index, equality, sort, ranges)
-        usable = prefix > 0 or (index.keys and index.keys[0][0] in ranges)
-        if not usable:
+        if not _usable(index, prefix, sort_ok, equality, ranges, effective_sort):
             continue
         if (sort_ok, prefix) > (best[1], best[0]):
             best, best_index = (prefix, sort_ok), index

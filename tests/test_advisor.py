@@ -61,6 +61,31 @@ def test_sorting_on_a_field_pinned_by_equality_is_free():
     assert advise("status=live&sort=status", [index]).ok
 
 
+def test_an_index_that_only_provides_the_sort_serves_a_query_with_no_predicates():
+    # A "latest 25" listing filters on nothing; the index exists purely so the server walks the
+    # order rather than collecting the whole collection and sorting it.
+    index = Index([("audit.created", -1)])
+    advice = advise("sort=-created_at", [index])
+
+    assert advice.ok
+    assert advice.index is index
+    assert advice.warnings == ()
+
+
+def test_an_index_leading_on_a_different_field_does_not_serve_a_sort_only_query():
+    assert not advise("sort=-created_at", [Index([("status", 1), ("audit.created", -1)])]).ok
+
+
+def test_a_sort_only_query_under_keyset_pagination_is_served_by_the_sort_index():
+    cursors = Cursors(secret="k")
+    query = parse("sort=-created_at", SCHEMA, cursors=cursors)
+
+    advice = analyze(query, [Index([("_id", 1)], name="_id_"), Index([("audit.created", -1), ("_id", 1)], name="ok")])
+
+    assert advice.ok
+    assert advice.index.name == "ok"
+
+
 def test_no_index_at_all_is_reported_as_a_collection_scan():
     advice = advise("status=live")
     assert not advice.ok

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+**Fixed**
+
+- `analyze` reported a collection scan for a query with no predicates, even when an index provided
+  exactly its sort. `parse("sort=-created_at")` against `Index([("created_at", -1)])` returned
+  `ok=False` and suggested creating the index that already existed. An index was only treated as a
+  candidate when its leading key was pinned by an equality predicate or narrowed by a range; one
+  that earns its keep purely by providing the order was never considered. That is the shape of
+  every "latest 25" listing, so the most common list query got the worst advice.
+
 ## 0.4.0
 
 **Added**
